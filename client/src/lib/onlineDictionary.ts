@@ -6,6 +6,10 @@ type TaiwanMandarinCharacter = {
   bopomofo?: string;
   radical?: string;
   stroke_count?: number;
+  radical_meaning?: string;
+  radical_number?: number;
+  english?: string;
+  example_words?: string[];
 };
 
 type TaiwanMandarinWord = {
@@ -28,7 +32,7 @@ export type OnlinePhraseMeta = PhraseMeta & {
   characterDetails: TaiwanMandarinCharacter[];
 };
 
-const TAIWAN_MANDARIN_ENDPOINT = import.meta.env.VITE_TAIWAN_MANDARIN_ENDPOINT || "https://api.taiwanmandarin.com/words";
+const BASE_API = "https://api.taiwanmandarin.com";
 const MYMEMORY_ENDPOINT = import.meta.env.VITE_MYMEMORY_ENDPOINT || "https://api.mymemory.translated.net/get";
 const TATOEBA_ENDPOINT = "https://tatoeba.org/en/api_v0/search";
 const sessionCache = new Map<string, OnlinePhraseMeta | null>();
@@ -66,14 +70,12 @@ async function fetchExampleSentence(phrase: string, signal?: AbortSignal) {
     if (data.results && data.results.length > 0) {
       const result = data.results[0];
       
-      // Tìm câu tiếng Trung phồn thể nếu có
       let chineseSentence = result.text;
       if (result.transcriptions && result.transcriptions.length > 0) {
         const hant = result.transcriptions.find((t: any) => t.script === "Hant" || t.lang_tag === "zh-Hant");
         if (hant) chineseSentence = hant.text;
       }
       
-      // Lấy nghĩa tiếng Việt
       let vietnameseMeaning = "";
       if (result.translations && result.translations.length > 0 && result.translations[0].length > 0) {
         vietnameseMeaning = result.translations[0][0].text;
@@ -93,23 +95,101 @@ async function fetchExampleSentence(phrase: string, signal?: AbortSignal) {
   return null;
 }
 
+/** Look up a single character via /characters/:char */
+async function lookupCharacter(char: string, signal?: AbortSignal): Promise<TaiwanMandarinCharacter | null> {
+  try {
+    const response = await fetch(`${BASE_API}/characters/${encodeURIComponent(char)}`, {
+      signal,
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as TaiwanMandarinCharacter;
+  } catch {
+    return null;
+  }
+}
+
+/** Look up a multi-character word via /words/:word */
+async function lookupWord(word: string, signal?: AbortSignal): Promise<TaiwanMandarinWord | null> {
+  try {
+    const response = await fetch(`${BASE_API}/words/${encodeURIComponent(word)}`, {
+      signal,
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as TaiwanMandarinWord;
+  } catch {
+    return null;
+  }
+}
+
 export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): Promise<OnlinePhraseMeta | null> {
   const key = phrase.trim();
   if (!key) return null;
   if (sessionCache.has(key)) return sessionCache.get(key) ?? null;
 
-  const response = await fetch(`${TAIWAN_MANDARIN_ENDPOINT}/${encodeURIComponent(key)}`, {
-    signal,
-    headers: { Accept: "application/json" },
-  });
-  if (response.status === 404) {
-    sessionCache.set(key, null);
-    return null;
-  }
-  if (!response.ok) throw new Error(`Từ điển Taiwan Mandarin trả về HTTP ${response.status}`);
+  const isSingleChar = [...key].length === 1;
+  
+  let word: string = key;
+  let pinyin = "";
+  let bopomofo = "";
+  let english = "";
+  let posLabel = "";
+  let tocflLevel = "";
+  let characterDetails: TaiwanMandarinCharacter[] = [];
+  let exampleWords: string[] = [];
 
-  const payload = (await response.json()) as TaiwanMandarinWord;
-  const english = clean(payload.english);
+  if (isSingleChar) {
+    // Single character: use /characters/:char endpoint
+    const charData = await lookupCharacter(key, signal);
+    if (!charData) {
+      sessionCache.set(key, null);
+      return null;
+    }
+    word = charData.char || key;
+    pinyin = charData.pinyin || "";
+    bopomofo = charData.bopomofo || "";
+    english = charData.english || "";
+    posLabel = (charData as any).pos_label || "";
+    tocflLevel = (charData as any).tocfl_level_name || "";
+    exampleWords = charData.example_words || [];
+    characterDetails = [charData];
+  } else {
+    // Multi-character word: use /words/:word endpoint
+    const wordData = await lookupWord(key, signal);
+    if (!wordData) {
+      // Fallback: try looking up each character individually
+      const chars = [...key];
+      const charResults = await Promise.all(chars.map(c => lookupCharacter(c, signal)));
+      const validChars = charResults.filter((c): c is TaiwanMandarinCharacter => c !== null);
+      if (validChars.length === 0) {
+        sessionCache.set(key, null);
+        return null;
+      }
+      characterDetails = validChars;
+      word = key;
+      pinyin = validChars.map(c => c.pinyin || "?").join(" ");
+      bopomofo = validChars.map(c => c.bopomofo || "?").join(" ");
+      english = "";
+    } else {
+      word = wordData.word || key;
+      pinyin = wordData.pinyin || "";
+      bopomofo = wordData.bopomofo || "";
+      english = clean(wordData.english);
+      posLabel = wordData.pos_label || "";
+      tocflLevel = wordData.tocfl_level_name || "";
+      characterDetails = wordData.characters ?? [];
+
+      // If word API didn't return character details, fetch them individually
+      if (characterDetails.length === 0) {
+        const chars = [...key];
+        const charResults = await Promise.all(chars.map(c => lookupCharacter(c, signal)));
+        characterDetails = charResults.filter((c): c is TaiwanMandarinCharacter => c !== null);
+      }
+    }
+  }
+
+  // Vietnamese translation
   let vietnamese = "";
   try {
     vietnamese = await lookupVietnameseMeaning(key, signal);
@@ -117,33 +197,46 @@ export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): 
     vietnamese = "";
   }
   const meaning = vietnamese || english || "Chưa có nghĩa trực tuyến";
-  const level = payload.tocfl_level_name ? ` · ${payload.tocfl_level_name}` : "";
-  const pos = payload.pos_label ? `${payload.pos_label}${level}` : `Tra online${level}`;
+  const level = tocflLevel ? ` · ${tocflLevel}` : "";
+  const pos = posLabel ? `${posLabel}${level}` : `Tra online${level}`;
   
+  // Example sentence from Tatoeba
   const exampleData = await fetchExampleSentence(key, signal);
-  let finalExample = english || "—";
-  let finalExampleMeaning = vietnamese ? `Nghĩa gốc: ${english || "đã được chuyển sang tiếng Việt ở trên"}.` : "Nghĩa tiếng Anh từ Taiwan Mandarin API.";
-  let finalExampleLabel = english ? "NGHĨA GỐC" : "GHI CHÚ";
-  let finalSource = vietnamese ? "Taiwan Mandarin API · zh-TW + MyMemory VI" : "Taiwan Mandarin API · zh-TW";
+  let finalExample = "";
+  let finalExampleMeaning = "";
+  let finalExampleLabel = "";
+  let finalSource = vietnamese ? "Taiwan Mandarin API + MyMemory VI" : "Taiwan Mandarin API";
 
   if (exampleData) {
     finalExample = exampleData.sentence;
     finalExampleMeaning = exampleData.meaning;
     finalExampleLabel = "VÍ DỤ";
     finalSource += " + Tatoeba";
+  } else if (exampleWords.length > 0) {
+    finalExample = exampleWords.slice(0, 5).join("、");
+    finalExampleMeaning = "Các từ ghép thường gặp chứa ký tự này.";
+    finalExampleLabel = "TỪ GHÉP";
+  } else if (english) {
+    finalExample = english;
+    finalExampleMeaning = vietnamese ? `Nghĩa gốc tiếng Anh.` : "Nghĩa tiếng Anh từ Taiwan Mandarin API.";
+    finalExampleLabel = "NGHĨA GỐC";
+  } else {
+    finalExample = "—";
+    finalExampleMeaning = "";
+    finalExampleLabel = "GHI CHÚ";
   }
 
   const result: OnlinePhraseMeta = {
-    phrase: payload.word || key,
-    pinyin: payload.pinyin || "Chưa có pinyin online",
-    zhuyin: payload.bopomofo || "Chưa có zhuyin online",
+    phrase: word,
+    pinyin: pinyin || "Chưa có pinyin online",
+    zhuyin: bopomofo || "Chưa có zhuyin online",
     meaning,
     partOfSpeech: pos,
     example: finalExample,
     exampleMeaning: finalExampleMeaning,
     exampleLabel: finalExampleLabel,
     source: finalSource,
-    characterDetails: payload.characters ?? [],
+    characterDetails,
   };
   sessionCache.set(key, result);
   return result;
