@@ -17,7 +17,7 @@ import {
 } from "@/lib/hanziData";
 import { RADICAL_DICT } from "@/lib/radicalData";
 import { getSpeechRecognition, type SpeechRecognitionLike } from "@/lib/speechRecognition";
-import { lookupOnlinePhrase, type OnlinePhraseMeta } from "@/lib/onlineDictionary";
+import { lookupOnlinePhrase, type OnlinePhraseMeta, s2t, t2s } from "@/lib/onlineDictionary";
 import { loadIdsMapping, parseIds } from "@/lib/idsService";
 
 const MARK_URL = "/images/hanzi-mapper-mark.png";
@@ -32,17 +32,20 @@ function extractHanziPhrase(value: string) {
   return Array.from(resolveHanziInput(value)).filter((char) => isHanzi(char)).join("");
 }
 
-function speakMandarin(text: string) {
+function speakMandarin(text: string, variant: "traditional" | "simplified" = "traditional") {
   if (!("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "zh-TW";
+  utterance.lang = variant === "simplified" ? "zh-CN" : "zh-TW";
   utterance.rate = 0.82;
   utterance.pitch = 1;
   window.speechSynthesis.speak(utterance);
 }
 
 export default function Home() {
+  const [variant, setVariant] = useState<"traditional" | "simplified">(
+    () => (localStorage.getItem("hanziVariant") as "traditional" | "simplified") || "traditional"
+  );
   const [query, setQuery] = useState("你");
   const [character, setCharacter] = useState("你");
   const [strokeData, setStrokeData] = useState<StrokeData | null>(null);
@@ -60,8 +63,15 @@ export default function Home() {
   const [onlinePhraseError, setOnlinePhraseError] = useState("");
   const [onlineCharacterMeta, setOnlineCharacterMeta] = useState<OnlinePhraseMeta | null>(null);
 
+  useEffect(() => {
+    localStorage.setItem("hanziVariant", variant);
+  }, [variant]);
+
+  // When variant changes, we should re-fetch metadata for the current query/character
+  // but we can just trigger it implicitly via useEffect dependencies.
+  
   const resolvedPhrase = useMemo(() => extractHanziPhrase(query), [query]);
-  const phraseMeta: PhraseMeta | null = onlinePhraseMeta;
+  const phraseMeta = onlinePhraseMeta;
   const phraseLookupState = onlinePhraseLoading ? "loading" : onlinePhraseMeta ? "online" : onlinePhraseError ? "error" : "empty";
 
   const meta: HanziMeta = useMemo(() => {
@@ -72,7 +82,9 @@ export default function Home() {
     let radicalPinyin = fallback.radicalPinyin;
     let radicalMeaning = "";
     if (detail?.radical) {
-      const radInfo = RADICAL_DICT[detail.radical];
+      // Find original traditional radical for lookup in RADICAL_DICT if we are in simplified
+      const dictKey = variant === "simplified" ? s2t(detail.radical) : detail.radical;
+      const radInfo = RADICAL_DICT[dictKey] || RADICAL_DICT[detail.radical];
       if (radInfo) {
         radicalPinyin = `${radInfo.pinyin} / ${radInfo.vi}`;
         radicalMeaning = radInfo.meaning;
@@ -84,12 +96,13 @@ export default function Home() {
     const parsed = detail?.radical ? parseIds(character, detail.radical) : null;
 
     const components = detail?.radical ? [
-      { char: detail.radical, label: `Bộ ${RADICAL_DICT[detail.radical]?.vi || detail.radical}`, role: "bộ thủ chính", position: parsed?.structure || "—", tone: "tea" as const },
+      { char: detail.radical, label: `Bộ ${detail.radical_meaning || detail.radical}`, role: "bộ thủ chính", position: parsed?.structure || "—", tone: "tea" as const },
       { char: parsed?.remaining || "…", label: "Phần còn lại", role: "thành phần", position: "—", tone: "ink" as const }
     ] : fallback.components;
 
     return {
       ...fallback,
+      traditional: variant === "simplified" ? "简体字 · CHỮ GIẢN THỂ" : "繁體字 · CHỮ PHỒN THỂ",
       radical: detail?.radical ?? fallback.radical,
       radicalPinyin,
       pinyin: detail?.pinyin ?? (phraseMeta?.phrase === character ? phraseMeta.pinyin : fallback.pinyin),
@@ -99,7 +112,7 @@ export default function Home() {
       structure: parsed?.structure ?? (detail?.radical ? "Chưa rõ cấu trúc (tự động)" : fallback.structure),
       note: detail?.radical ? `Đã nạp tự động bộ thủ [ ${detail.radical} ] và âm đọc từ từ điển online.` : fallback.note
     };
-  }, [character, phraseMeta, onlineCharacterMeta]);
+  }, [character, phraseMeta, onlineCharacterMeta, variant]);
 
   useEffect(() => {
     loadIdsMapping();
@@ -107,11 +120,11 @@ export default function Home() {
 
   useEffect(() => {
     const controller = new AbortController();
-    lookupOnlinePhrase(character, controller.signal)
+    lookupOnlinePhrase(character, variant, controller.signal)
       .then(res => setOnlineCharacterMeta(res))
       .catch(() => {});
     return () => controller.abort();
-  }, [character]);
+  }, [character, variant]);
 
   useEffect(() => {
     if (!resolvedPhrase) {
@@ -124,7 +137,7 @@ export default function Home() {
     setOnlinePhraseMeta(null);
     setOnlinePhraseLoading(true);
     setOnlinePhraseError("");
-    void lookupOnlinePhrase(resolvedPhrase, controller.signal)
+    void lookupOnlinePhrase(resolvedPhrase, variant, controller.signal)
       .then((result) => setOnlinePhraseMeta(result))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -134,7 +147,7 @@ export default function Home() {
         if (!controller.signal.aborted) setOnlinePhraseLoading(false);
       });
     return () => controller.abort();
-  }, [resolvedPhrase]);
+  }, [resolvedPhrase, variant]);
 
   const loadCharacter = useCallback(async (nextCharacter: string, displayValue?: string) => {
     const clean = pickCharacter(nextCharacter);
@@ -158,8 +171,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void loadCharacter("你");
-  }, [loadCharacter]);
+    void loadCharacter(variant === "simplified" ? "你" : "你");
+  }, [loadCharacter, variant]);
 
   useEffect(() => {
     if (!isPlaying || !strokeData?.strokes.length) return;
@@ -188,7 +201,7 @@ export default function Home() {
       return;
     }
     const nextRecognition = new Recognition();
-    nextRecognition.lang = "cmn-Hant-TW"; // Sử dụng mã cmn-Hant-TW để bắt buộc ra chữ Phồn thể
+    nextRecognition.lang = variant === "simplified" ? "cmn-Hans-CN" : "cmn-Hant-TW";
     nextRecognition.interimResults = true;
     nextRecognition.continuous = false;
     nextRecognition.onstart = () => {
@@ -233,7 +246,7 @@ export default function Home() {
           <img src={MARK_URL} alt="" className="brand-mark" />
           <div>
             <div className="brand-name">Hanzi <span>·</span> Mapper</div>
-            <div className="brand-kicker">BÀN HỌC CHỮ PHỒN THỂ</div>
+            <div className="brand-kicker">BÀN HỌC CHỮ {variant === "simplified" ? "GIẢN THỂ" : "PHỒN THỂ"}</div>
           </div>
         </div>
         <nav className="header-nav" aria-label="Điều hướng chính">
@@ -241,7 +254,17 @@ export default function Home() {
           <a href="#stroke-lab">Thứ tự nét</a>
           <a href="#about">Cách học</a>
         </nav>
-        <div className="header-status"><span className="status-dot" /> TOCFL · STARTER</div>
+        <div className="header-status" style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+          <button 
+            type="button" 
+            onClick={() => setVariant(v => v === "traditional" ? "simplified" : "traditional")}
+            style={{ fontSize: "12px", fontWeight: 600, padding: "4px 10px", borderRadius: "12px", border: "1px solid var(--border)", background: "var(--background)", cursor: "pointer", color: "var(--foreground)", transition: "all 0.2s ease" }}
+            aria-label={`Đang ở chế độ ${variant === "traditional" ? "Phồn thể" : "Giản thể"}, bấm để đổi`}
+          >
+            Đổi sang: {variant === "traditional" ? "Giản thể" : "Phồn thể"}
+          </button>
+          <span><span className="status-dot" /> {variant === "simplified" ? "HSK" : "TOCFL"} · STARTER</span>
+        </div>
       </header>
 
       <main id="workspace" className="workspace">
@@ -249,7 +272,7 @@ export default function Home() {
           <div className="section-kicker"><span className="red-seal">一</span> BÀN NHẬP CHỮ</div>
           <div className="intro-copy">
             <h1 id="page-title">Gõ một chữ.<br /><em>Nhìn thấy cách nó được dựng lên.</em></h1>
-            <p>Tra bộ thủ, cấu trúc và nét viết của chữ Hán phồn thể theo cách trực quan hơn một cuốn từ điển.</p>
+            <p>Tra bộ thủ, cấu trúc và nét viết của chữ Hán {variant === "simplified" ? "giản thể" : "phồn thể"} theo cách trực quan hơn một cuốn từ điển.</p>
           </div>
 
           <div className="search-form" role="search">
@@ -265,7 +288,7 @@ export default function Home() {
                     if (event.key === "Enter") handleSearch();
                   }}
                   maxLength={12}
-                  placeholder="例如：學習、請問、海邊"
+                  placeholder={variant === "simplified" ? "例如：学习、请问、海边" : "例如：學習、請問、海邊"}
                   aria-label="Nhập chữ Hán"
                 />
                 <Button type="button" variant="ghost" className={`mic-button ${isListening ? "is-listening" : ""}`} onClick={handleMic} aria-label={isListening ? "Dừng nghe" : "Nhập chữ bằng mic"}>
@@ -277,7 +300,7 @@ export default function Home() {
                 Tra chữ <ChevronRight size={17} />
               </Button>
             </div>
-            <div className="search-helper"><Info size={13} /> Nhập một chữ hoặc cả cụm từ phồn thể. Chữ đang xem được phân tích ở bên phải.</div>
+            <div className="search-helper"><Info size={13} /> Nhập một chữ hoặc cả cụm từ. Chữ đang xem được phân tích ở bên phải.</div>
             {micMessage && <div className={`mic-message ${isListening ? "is-listening" : ""}`}><Mic size={13} /> {micMessage}</div>}
             <button type="button" className="handwriting-trigger" onClick={() => setShowWritingPad((previous) => !previous)}><PenLine size={15} /> {showWritingPad ? "Đóng bảng viết tay" : "Viết tay để tra chữ"}<ChevronRight size={14} /></button>
             {extractHanziPhrase(query).length > 1 && (
@@ -294,13 +317,13 @@ export default function Home() {
             )}
             {showWritingPad && <HandwritingPad onClose={() => setShowWritingPad(false)} onSelect={(value) => { setShowWritingPad(false); void loadCharacter(value, value); }} />}
             {resolvedPhrase.length >= 2 && <div className={`phrase-dictionary-card ${phraseLookupState === "online" ? "is-online" : ""} ${phraseLookupState === "empty" || phraseLookupState === "error" ? "is-untranslated" : ""}`}>
-              {phraseLookupState === "loading" && !phraseMeta && <div className="phrase-lookup-state"><Loader2 size={17} className="animate-spin" /><strong>Đang tra cụm online…</strong><small>Ưu tiên dữ liệu chữ phồn thể Đài Loan.</small></div>}
+              {phraseLookupState === "loading" && !phraseMeta && <div className="phrase-lookup-state"><Loader2 size={17} className="animate-spin" /><strong>Đang tra cụm online…</strong><small>Đang sử dụng hệ thống API Taiwan Mandarin.</small></div>}
               {phraseLookupState === "error" && <div className="phrase-lookup-state"><Info size={17} /><strong>Không kết nối được từ điển online.</strong><small>{onlinePhraseError} Bạn vẫn có thể chọn từng chữ bên dưới.</small></div>}
               {phraseLookupState === "empty" && <div className="phrase-lookup-state"><BookOpen size={17} /><strong>Chưa tìm thấy nghĩa online.</strong><small>Cụm đã được nhận diện; hãy chọn từng chữ để phân tích hoặc thử cách gõ khác.</small></div>}
               {phraseMeta && <>
               <div className="phrase-dictionary-card__header">
                 <div><span className="metadata-label">TỪ ĐIỂN ONLINE</span><strong>{phraseMeta.phrase}</strong></div>
-                <button type="button" className="speak-button" onClick={() => speakMandarin(phraseMeta.phrase)} aria-label={`Nghe ${phraseMeta.phrase}`}><Volume2 size={16} /> Nghe cụm</button>
+                <button type="button" className="speak-button" onClick={() => speakMandarin(phraseMeta.phrase, variant)} aria-label={`Nghe ${phraseMeta.phrase}`}><Volume2 size={16} /> Nghe cụm</button>
               </div>
               <div className="phrase-dictionary-reading"><strong>{phraseMeta.pinyin}</strong><span>{phraseMeta.zhuyin}</span><em>{phraseMeta.partOfSpeech}</em></div>
               <p className="phrase-dictionary-meaning">{phraseMeta.meaning}</p>
@@ -313,15 +336,16 @@ export default function Home() {
           <div className="example-strip">
             <div className="example-label">THỬ NHANH</div>
             <div className="example-chips">
-              {HANZI_EXAMPLES.map((example) => (
-                <button key={example} className={example === character ? "example-chip is-selected" : "example-chip"} onClick={() => void loadCharacter(example)}>
-                  {example}
-                </button>
-              ))}
+              {HANZI_EXAMPLES.map((example) => {
+                const exChar = variant === "simplified" ? t2s(example) : example;
+                return (
+                  <button key={exChar} className={exChar === character ? "example-chip is-selected" : "example-chip"} onClick={() => void loadCharacter(exChar)}>
+                    {exChar}
+                  </button>
+                );
+              })}
             </div>
           </div>
-
-
 
           <div className="desk-note" style={{ backgroundImage: `url(${DESK_URL})` }}>
             <div className="desk-note__veil" />
@@ -339,16 +363,17 @@ export default function Home() {
               <div className="section-kicker">KẾT QUẢ TRA CỨU <span className="ink-rule" /></div>
               <h2 id="result-title">Chữ đang ở trên bàn</h2>
             </div>
-            <div className="result-index">#{String(HANZI_EXAMPLES.indexOf(character) + 1).padStart(2, "0")}</div>
+            <div className="result-index">#{String(HANZI_EXAMPLES.indexOf(variant === "simplified" ? s2t(character) : character) + 1).padStart(2, "0")}</div>
           </div>
 
           <div className="character-card">
             <div className="character-card__main">
-              <span className="character-card__label">繁體字 · CHỮ PHỒN THỂ</span>
+              <span className="character-card__label">{meta.traditional}</span>
               <div className="main-character">{character}</div>
-              <div className="character-reading"><span>{meta.pinyin}</span><span className="reading-divider">/</span><span>{meta.meaning}</span><button type="button" className="speak-button speak-button--small" onClick={() => speakMandarin(character)} aria-label={`Nghe chữ ${character}`}><Volume2 size={14} /></button></div>
+              <div className="character-reading"><span>{meta.pinyin}</span><span className="reading-divider">/</span><span>{meta.meaning}</span><button type="button" className="speak-button speak-button--small" onClick={() => speakMandarin(character, variant)} aria-label={`Nghe chữ ${character}`}><Volume2 size={14} /></button></div>
             </div>
-            <div className="character-card__stamp">{meta.traditional}</div>
+            {variant === "traditional" && <div className="character-card__stamp">繁</div>}
+            {variant === "simplified" && <div className="character-card__stamp" style={{color: "var(--brand)"}}>简</div>}
           </div>
 
           <div className="mapping-thread" aria-hidden="true"><span className="mapping-thread__dot" /><span className="mapping-thread__line" /><span className="mapping-thread__label">MAPPING THREAD</span><span className="mapping-thread__line" /><span className="mapping-thread__dot" /></div>
@@ -409,13 +434,14 @@ export default function Home() {
 
           <div id="about" className="study-tip" style={{ backgroundImage: `url(${INK_WASH_URL})` }}>
             <div className="study-tip__overlay" />
-            <div className="study-tip__content"><span className="metadata-label">GỢI Ý ÔN TOCFL</span><strong>Đừng chỉ đọc nghĩa. Hãy gọi tên bộ thủ trước.</strong><span>Che phần ví dụ, nhìn chữ lớn và tự nói: “Bộ gì? Cấu trúc gì? Nét nào đi trước?”</span></div>
+            <div className="study-tip__content"><span className="metadata-label">GỢI Ý ÔN {variant === "simplified" ? "HSK" : "TOCFL"}</span><strong>Đừng chỉ đọc nghĩa. Hãy gọi tên bộ thủ trước.</strong><span>Che phần ví dụ, nhìn chữ lớn và tự nói: “Bộ gì? Cấu trúc gì? Nét nào đi trước?”</span></div>
             <Volume2 size={18} className="tip-icon" />
           </div>
         </section>
       </main>
 
-      <footer className="site-footer"><span>Hanzi · Mapper / Bản học thử chữ phồn thể</span><span>Nét chữ: <a href="https://github.com/chanind/hanzi-writer-data" target="_blank" rel="noreferrer">Hanzi Writer Data</a> · Chú giải bộ thủ: bộ mẫu TOCFL</span></footer>
+      <footer className="site-footer"><span>Hanzi · Mapper / Bản học thử chữ {variant === "simplified" ? "giản thể" : "phồn thể"}</span><span>Nét chữ: <a href="https://github.com/chanind/hanzi-writer-data" target="_blank" rel="noreferrer">Hanzi Writer Data</a> · Chú giải bộ thủ: bộ mẫu {variant === "simplified" ? "HSK" : "TOCFL"}</span></footer>
     </div>
   );
 }
+

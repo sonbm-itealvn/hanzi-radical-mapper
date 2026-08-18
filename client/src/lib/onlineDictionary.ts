@@ -1,4 +1,9 @@
 import type { PhraseMeta } from "@/lib/hanziData";
+import * as OpenCC from "opencc-js";
+
+// Initialize converters
+export const s2t = OpenCC.Converter({ from: "cn", to: "tw" });
+export const t2s = OpenCC.Converter({ from: "tw", to: "cn" });
 
 type TaiwanMandarinCharacter = {
   char: string;
@@ -72,7 +77,8 @@ async function fetchExampleSentence(phrase: string, signal?: AbortSignal) {
       
       let chineseSentence = result.text;
       if (result.transcriptions && result.transcriptions.length > 0) {
-        const hant = result.transcriptions.find((t: any) => t.script === "Hant" || t.lang_tag === "zh-Hant");
+        // Try to get Hant or Hans depending on what exists
+        const hant = result.transcriptions.find((t: any) => t.script === "Hant" || t.lang_tag === "zh-Hant" || t.script === "Hans" || t.lang_tag === "zh-Hans");
         if (hant) chineseSentence = hant.text;
       }
       
@@ -123,14 +129,22 @@ async function lookupWord(word: string, signal?: AbortSignal): Promise<TaiwanMan
   }
 }
 
-export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): Promise<OnlinePhraseMeta | null> {
+export async function lookupOnlinePhrase(
+  phrase: string, 
+  variant: "traditional" | "simplified" = "traditional", 
+  signal?: AbortSignal
+): Promise<OnlinePhraseMeta | null> {
   const key = phrase.trim();
   if (!key) return null;
-  if (sessionCache.has(key)) return sessionCache.get(key) ?? null;
-
-  const isSingleChar = [...key].length === 1;
   
-  let word: string = key;
+  const cacheKey = `${variant}:${key}`;
+  if (sessionCache.has(cacheKey)) return sessionCache.get(cacheKey) ?? null;
+
+  // Taiwan Mandarin API requires traditional characters.
+  const apiQuery = variant === "simplified" ? s2t(key) : key;
+  const isSingleChar = Array.from(apiQuery).length === 1;
+  
+  let word: string = apiQuery;
   let pinyin = "";
   let bopomofo = "";
   let english = "";
@@ -141,12 +155,12 @@ export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): 
 
   if (isSingleChar) {
     // Single character: use /characters/:char endpoint
-    const charData = await lookupCharacter(key, signal);
+    const charData = await lookupCharacter(apiQuery, signal);
     if (!charData) {
-      sessionCache.set(key, null);
+      sessionCache.set(cacheKey, null);
       return null;
     }
-    word = charData.char || key;
+    word = charData.char || apiQuery;
     pinyin = charData.pinyin || "";
     bopomofo = charData.bopomofo || "";
     english = charData.english || "";
@@ -156,23 +170,23 @@ export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): 
     characterDetails = [charData];
   } else {
     // Multi-character word: use /words/:word endpoint
-    const wordData = await lookupWord(key, signal);
+    const wordData = await lookupWord(apiQuery, signal);
     if (!wordData) {
       // Fallback: try looking up each character individually
-      const chars = [...key];
+      const chars = Array.from(apiQuery);
       const charResults = await Promise.all(chars.map(c => lookupCharacter(c, signal)));
       const validChars = charResults.filter((c): c is TaiwanMandarinCharacter => c !== null);
       if (validChars.length === 0) {
-        sessionCache.set(key, null);
+        sessionCache.set(cacheKey, null);
         return null;
       }
       characterDetails = validChars;
-      word = key;
+      word = apiQuery;
       pinyin = validChars.map(c => c.pinyin || "?").join(" ");
       bopomofo = validChars.map(c => c.bopomofo || "?").join(" ");
       english = "";
     } else {
-      word = wordData.word || key;
+      word = wordData.word || apiQuery;
       pinyin = wordData.pinyin || "";
       bopomofo = wordData.bopomofo || "";
       english = clean(wordData.english);
@@ -182,14 +196,28 @@ export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): 
 
       // If word API didn't return character details, fetch them individually
       if (characterDetails.length === 0) {
-        const chars = [...key];
+        const chars = Array.from(apiQuery);
         const charResults = await Promise.all(chars.map(c => lookupCharacter(c, signal)));
         characterDetails = charResults.filter((c): c is TaiwanMandarinCharacter => c !== null);
       }
     }
   }
 
-  // Vietnamese translation
+  // Convert everything to Simplified if requested
+  if (variant === "simplified") {
+    word = t2s(word);
+    posLabel = t2s(posLabel);
+    exampleWords = exampleWords.map(t2s);
+    characterDetails = characterDetails.map(c => ({
+      ...c,
+      char: t2s(c.char),
+      radical: c.radical ? t2s(c.radical) : undefined,
+      radical_meaning: c.radical_meaning ? t2s(c.radical_meaning) : undefined,
+      example_words: c.example_words?.map(t2s)
+    }));
+  }
+
+  // Vietnamese translation (query with original key, MyMemory handles both)
   let vietnamese = "";
   try {
     vietnamese = await lookupVietnameseMeaning(key, signal);
@@ -197,7 +225,7 @@ export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): 
     vietnamese = "";
   }
   const meaning = vietnamese || english || "Chưa có nghĩa trực tuyến";
-  const level = tocflLevel ? ` · ${tocflLevel}` : "";
+  const level = tocflLevel ? ` · ${variant === "simplified" ? "HSK/TOCFL" : tocflLevel}` : "";
   const pos = posLabel ? `${posLabel}${level}` : `Tra online${level}`;
   
   // Example sentence from Tatoeba
@@ -208,7 +236,7 @@ export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): 
   let finalSource = vietnamese ? "Taiwan Mandarin API + MyMemory VI" : "Taiwan Mandarin API";
 
   if (exampleData) {
-    finalExample = exampleData.sentence;
+    finalExample = variant === "simplified" ? t2s(exampleData.sentence) : exampleData.sentence;
     finalExampleMeaning = exampleData.meaning;
     finalExampleLabel = "VÍ DỤ";
     finalSource += " + Tatoeba";
@@ -238,6 +266,6 @@ export async function lookupOnlinePhrase(phrase: string, signal?: AbortSignal): 
     source: finalSource,
     characterDetails,
   };
-  sessionCache.set(key, result);
+  sessionCache.set(cacheKey, result);
   return result;
 }
