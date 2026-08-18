@@ -1,0 +1,42 @@
+# Hạng mục nâng cấp đang thực hiện
+
+- [x] Thêm nút nhập chữ bằng mic với nhận dạng tiếng Hoa Đài Loan và trạng thái đang nghe.
+- [x] Thêm fallback rõ ràng khi trình duyệt không hỗ trợ Web Speech API hoặc người dùng từ chối quyền mic.
+- [x] Dựng dải thumbnail từng nét có số thứ tự và trạng thái đã viết / đang chọn / chưa viết.
+- [x] Bổ sung ô mẹo viết tay theo chữ đang tra và phần cấu tạo pinyin.
+- [x] Kiểm tra bố cục mới trên desktop và mobile, sau đó lưu checkpoint.
+- [x] Đối chiếu canvas thứ tự nét với chữ lớn và sửa nếu dữ liệu bị lật/tráo hệ tọa độ.
+- [x] Thêm lớp chữ nền đối chiếu và kiểm tra các chữ mẫu `你`, `好`, `學`, `海`.
+- [x] Chạy lại build, preview và lưu checkpoint sửa lỗi.
+- [x] Kiểm tra hệ tọa độ `viewBox`, trục y và transform của `HanziStrokeCanvas`.
+- [x] Đối chiếu outline/median của thư viện stroke với glyph chữ phồn thể hiển thị.
+- [x] Sửa render đúng chiều, kiểm tra build/preview và tạo checkpoint mới.
+- [x] Giữ nguyên toàn bộ cụm chữ Hán từ mic thay vì chỉ lấy ký tự đầu tiên.
+- [x] Hiển thị bộ chọn từng chữ trong cụm và phân tích chữ được chọn.
+- [x] Kiểm tra cụm hai âm tiết, build/preview và tạo checkpoint mới.
+- [x] Thêm canvas viết tay với xóa nét, hoàn tác và nhận diện trên trình duyệt.
+- [x] Hiển thị nhiều ứng viên nhận diện để người dùng chọn chữ chính xác.
+- [x] Thêm gợi ý chữ/từ theo nội dung nhập và cụm chữ Hán mẫu.
+- [x] Kiểm tra responsive, build và tạo checkpoint mới.
+- [x] Mở rộng ô viết tay thành vùng lớn, dễ thao tác trên desktop và mobile.
+- [x] Thêm dữ liệu nghĩa, pinyin, zhuyin và loại từ cho các cụm mẫu TOCFL.
+- [x] Thêm phát âm cho chữ đơn và cụm từ, cùng thẻ tra cụm riêng.
+- [x] Kiểm tra responsive, build và tạo checkpoint mới.
+- [x] Thêm ánh xạ pinyin không dấu như `xiaojie` sang cụm chữ phồn thể tương ứng.
+- [x] Bổ sung metadata nghĩa, pinyin, zhuyin và ví dụ cho `小姐`.
+- [x] Giữ thẻ nghĩa cụm hiển thị khi người dùng chọn từng chữ con.
+- [x] Build, preview và tạo checkpoint sửa lỗi.
+- [x] Bổ sung alias `riben` để nhận `Ri ben`, `ri ben` và `rìběn` sau chuẩn hóa.
+- [x] Thêm metadata nghĩa, pinyin, zhuyin và ví dụ cho `日本`.
+- [x] Kiểm tra build, preview và tạo checkpoint sửa lỗi.
+- [x] Đối chiếu khóa `日本` trong dữ liệu cụm với điều kiện render ở Home.
+- [x] Sửa để thẻ nghĩa cụm luôn hiển thị khi chọn từng chữ trong cụm.
+- [x] Kiểm tra `日本`, `小姐` và build/preview rồi tạo checkpoint.
+- [x] Kiểm tra connector/API từ điển online và khả năng CORS.
+- [x] Thêm lớp tra cứu online có chuẩn hóa kết quả, timeout và cache phiên.
+- [x] Hiển thị trạng thái đang tra, lỗi và nguồn dữ liệu trong thẻ cụm.
+- [x] Build, responsive preview và tạo checkpoint tích hợp API.
+- [x] Đánh giá nguồn dữ liệu có pinyin và zhuyin, ưu tiên chữ phồn thể.
+- [x] Thay MyMemory bằng bộ ghép từ điển phù hợp hơn, giữ nghĩa tiếng Việt làm fallback.
+- [x] Hiển thị rõ nguồn và trạng thái thiếu trường nếu dữ liệu online không đầy đủ.
+- [x] Build, kiểm thử cụm ngoài dữ liệu cục bộ và tạo checkpoint mới.
