@@ -4,10 +4,8 @@ import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
-const plugins = [react(), tailwindcss(), jsxLocPlugin()];
-
 export default defineConfig({
-  plugins,
+  plugins: [react(), tailwindcss(), jsxLocPlugin()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
